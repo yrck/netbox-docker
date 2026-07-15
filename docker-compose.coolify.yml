@@ -40,7 +40,6 @@ services:
     depends_on:
       netbox:
         condition: service_healthy
-    expose: []
     command:
       - /opt/netbox/venv/bin/python
       - /opt/netbox/netbox/manage.py
