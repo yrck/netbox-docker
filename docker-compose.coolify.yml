@@ -1,0 +1,112 @@
+# Coolify-oriented Compose for NetBox Docker.
+#
+# Why this exists:
+# - Coolify merges service env files into one .env. Upstream uses REDIS_PASSWORD
+#   in both redis and redis-cache with *different* values, which breaks under that merge.
+# - This file uses one env file (unique keys) and maps REDIS_CACHE_PASSWORD into
+#   the redis-cache container as REDIS_PASSWORD.
+#
+# In Coolify: set the Docker Compose file to docker-compose.coolify.yml
+# Proxy / exposed port: 8080 (do not use host port 8000 — Coolify uses that).
+
+services:
+  netbox: &netbox
+    image: docker.io/netboxcommunity/netbox:${VERSION:-v4.6-5.0.1}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      redis-cache:
+        condition: service_healthy
+    env_file: env/coolify.env
+    user: "netbox:root"
+    expose:
+      - "8080"
+    healthcheck:
+      test: curl -f http://localhost:8080/login/ || exit 1
+      start_period: 300s
+      timeout: 3s
+      interval: 15s
+      retries: 10
+    volumes:
+      - ./configuration:/etc/netbox/config:z,ro
+      - netbox-media-files:/opt/netbox/netbox/media:rw
+      - netbox-reports-files:/opt/netbox/netbox/reports:rw
+      - netbox-scripts-files:/opt/netbox/netbox/scripts:rw
+
+  netbox-worker:
+    <<: *netbox
+    depends_on:
+      netbox:
+        condition: service_healthy
+    expose: []
+    command:
+      - /opt/netbox/venv/bin/python
+      - /opt/netbox/netbox/manage.py
+      - rqworker
+    healthcheck:
+      test: ps -aux | grep -v grep | grep -q rqworker || exit 1
+      start_period: 60s
+      timeout: 3s
+      interval: 15s
+
+  postgres:
+    image: docker.io/postgres:18-alpine
+    env_file: env/coolify.env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    healthcheck:
+      test: pg_isready -q -t 2 -d $$POSTGRES_DB -U $$POSTGRES_USER
+      start_period: 20s
+      timeout: 30s
+      interval: 10s
+      retries: 5
+    volumes:
+      - netbox-postgres:/var/lib/postgresql
+
+  redis:
+    image: docker.io/valkey/valkey:9.0-alpine
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    command:
+      - sh
+      - -c
+      - valkey-server --appendonly yes --requirepass $$REDIS_PASSWORD
+    healthcheck: &redis-healthcheck
+      test: '[ $$(valkey-cli --pass "$${REDIS_PASSWORD}" ping) = ''PONG'' ]'
+      start_period: 5s
+      timeout: 3s
+      interval: 1s
+      retries: 5
+    volumes:
+      - netbox-redis-data:/data
+
+  redis-cache:
+    image: docker.io/valkey/valkey:9.0-alpine
+    # Unique key in env file → container still expects REDIS_PASSWORD
+    environment:
+      REDIS_PASSWORD: ${REDIS_CACHE_PASSWORD}
+    command:
+      - sh
+      - -c
+      - valkey-server --requirepass $$REDIS_PASSWORD
+    healthcheck: *redis-healthcheck
+    volumes:
+      - netbox-redis-cache-data:/data
+
+volumes:
+  netbox-media-files:
+    driver: local
+  netbox-postgres:
+    driver: local
+  netbox-redis-cache-data:
+    driver: local
+  netbox-redis-data:
+    driver: local
+  netbox-reports-files:
+    driver: local
+  netbox-scripts-files:
+    driver: local
