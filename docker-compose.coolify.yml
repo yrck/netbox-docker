@@ -3,11 +3,13 @@
 # Why this exists:
 # - Coolify merges service env files into one .env. Upstream uses REDIS_PASSWORD
 #   in both redis and redis-cache with *different* values, which breaks under that merge.
-# - This file uses one env file (unique keys) and maps REDIS_CACHE_PASSWORD into
-#   the redis-cache container as REDIS_PASSWORD.
+# - This file uses one env file with unique keys. redis-cache reads REDIS_CACHE_PASSWORD
+#   directly (no Compose ${...} remapping, which Coolify often leaves empty at start).
 #
 # In Coolify: set the Docker Compose file to docker-compose.coolify.yml
 # Proxy / exposed port: 8080 (do not use host port 8000 — Coolify uses that).
+# After import: confirm Environment UI has REDIS_PASSWORD and REDIS_CACHE_PASSWORD
+# (different values) plus POSTGRES_* / SECRET_KEY from env/coolify.env.
 
 services:
   netbox: &netbox
@@ -53,10 +55,6 @@ services:
   postgres:
     image: docker.io/postgres:18-alpine
     env_file: env/coolify.env
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     healthcheck:
       test: pg_isready -q -t 2 -d $$POSTGRES_DB -U $$POSTGRES_USER
       start_period: 20s
@@ -68,31 +66,34 @@ services:
 
   redis:
     image: docker.io/valkey/valkey:9.0-alpine
-    environment:
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    env_file: env/coolify.env
     command:
       - sh
       - -c
-      - valkey-server --appendonly yes --requirepass $$REDIS_PASSWORD
-    healthcheck: &redis-healthcheck
+      - valkey-server --appendonly yes --requirepass "$$REDIS_PASSWORD"
+    healthcheck:
       test: '[ $$(valkey-cli --pass "$${REDIS_PASSWORD}" ping) = ''PONG'' ]'
-      start_period: 5s
+      start_period: 10s
       timeout: 3s
-      interval: 1s
-      retries: 5
+      interval: 5s
+      retries: 10
     volumes:
       - netbox-redis-data:/data
 
   redis-cache:
     image: docker.io/valkey/valkey:9.0-alpine
-    # Unique key in env file → container still expects REDIS_PASSWORD
-    environment:
-      REDIS_PASSWORD: ${REDIS_CACHE_PASSWORD}
+    env_file: env/coolify.env
+    # Use the unique var name so Coolify's single .env cannot collide with redis.
     command:
       - sh
       - -c
-      - valkey-server --requirepass $$REDIS_PASSWORD
-    healthcheck: *redis-healthcheck
+      - valkey-server --requirepass "$$REDIS_CACHE_PASSWORD"
+    healthcheck:
+      test: '[ $$(valkey-cli --pass "$${REDIS_CACHE_PASSWORD}" ping) = ''PONG'' ]'
+      start_period: 10s
+      timeout: 3s
+      interval: 5s
+      retries: 10
     volumes:
       - netbox-redis-cache-data:/data
 
