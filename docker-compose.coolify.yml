@@ -32,7 +32,9 @@ services:
       interval: 15s
       retries: 10
     volumes:
-      - ./configuration:/etc/netbox/config:z,ro
+      # Do NOT bind-mount ./configuration here on Coolify: Coolify's app dir has an
+      # empty configuration/ folder that shadows the image's baked-in /etc/netbox/config.
+      # The netboxcommunity/netbox image already includes configuration.py and friends.
       - netbox-media-files:/opt/netbox/netbox/media:rw
       - netbox-reports-files:/opt/netbox/netbox/reports:rw
       - netbox-scripts-files:/opt/netbox/netbox/scripts:rw
